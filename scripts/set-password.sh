@@ -13,7 +13,7 @@ read -rsp "Repeat it:    " pw2; echo
 [ ${#pw} -ge 12 ] || { echo "Use at least 12 characters." >&2; exit 1; }
 
 version="$(grep -E '^CHANGEDETECTION_VERSION=' .env | cut -d= -f2 || true)"
-image="ghcr.io/dgtlmoon/changedetection.io:${version:-0.55.8}"
+image="ghcr.io/dgtlmoon/changedetection.io:${version:-0.60.10}"
 hash="$(PW="$pw" docker run --rm -e PW "$image" python -c '
 import base64, hashlib, os, secrets
 salt = secrets.token_bytes(32)

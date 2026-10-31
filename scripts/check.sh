@@ -10,14 +10,18 @@ cd "$(dirname "$0")/.."
 grep -qE '^SALTED_PASS=.+' .env 2>/dev/null || { echo "No password set yet. Run ./scripts/set-password.sh first." >&2; exit 1; }
 port="$(grep -E '^PORT=' .env | cut -d= -f2 || true)"
 url="http://127.0.0.1:${port:-5000}"
-jar="$(mktemp)"; trap 'rm -f "$jar"' EXIT
+jar="$(mktemp)"; trap 'rm -f "$jar" "$jar.log"' EXIT
 read -rsp "Password: " pw; echo
 
 ok()   { echo "  ok    $1"; }
 fail() { echo "  FAIL  $1" >&2; exit 1; }
 
+page()   { curl -s -b "$jar" -c "$jar" "$url/"; }
 status() { curl -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" "$@"; }
-csrf()   { curl -s -b "$jar" -c "$jar" "$1" | grep -o 'name="csrf_token" value="[^"]*"' | head -1 | cut -d'"' -f4; }
+csrf() {
+  local html; html="$(curl -s -b "$jar" -c "$jar" "$1")"
+  [[ $html =~ name=\"csrf_token\"\ value=\"([^\"]*)\" ]] && echo "${BASH_REMATCH[1]}"
+}
 
 wait_up() {
   for _ in $(seq 60); do
@@ -34,8 +38,10 @@ login() {
        --data-urlencode "password=$1" "$url/login"
 }
 
+up() { docker compose up -d >/dev/null 2>"$jar.log" || { cat "$jar.log" >&2; fail "docker compose up failed"; }; }
+
 echo "Starting stack..."
-docker compose up -d >/dev/null 2>&1
+up
 wait_up
 
 echo "Access:"
@@ -57,15 +63,15 @@ curl -s -o /dev/null -b "$jar" -c "$jar" \
   --data-urlencode "csrf_token=$token" --data-urlencode "url=$test_url" \
   --data-urlencode "processor=text_json_diff" --data-urlencode "watch_submit_button=Watch" \
   "$url/form/add/quickwatch"
-curl -s -b "$jar" "$url/" | grep -qF "$test_url" && ok "added test watch $test_url" || fail "could not add a watch"
+[[ "$(page)" == *"$test_url"* ]] && ok "added test watch $test_url" || fail "could not add a watch"
 
 echo "  ..    docker compose down && up (containers are destroyed and recreated)"
 docker compose down >/dev/null 2>&1
-docker compose up -d >/dev/null 2>&1
+up
 wait_up
 
 login "$pw"
-curl -s -b "$jar" "$url/" | grep -qF "$test_url" && ok "watch is still there after recreate" || fail "watch was lost"
+[[ "$(page)" == *"$test_url"* ]] && ok "watch is still there after recreate" || fail "watch was lost"
 
 echo
 echo "All good. You can delete the example.com test watch in the UI."

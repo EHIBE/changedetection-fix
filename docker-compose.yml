@@ -1,6 +1,6 @@
 services:
   changedetection:
-    image: ghcr.io/dgtlmoon/changedetection.io:${CHANGEDETECTION_VERSION:-0.55.8}
+    image: ghcr.io/dgtlmoon/changedetection.io:${CHANGEDETECTION_VERSION:-0.60.10}
     hostname: changedetection
     environment:
       # Login password, set by ./scripts/set-password.sh. Because it comes from the

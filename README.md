@@ -1,55 +1,53 @@
 # changedetection.io: why fields keep disappearing
 
-Short version: changedetection.io itself is saving everything just fine. The problem is that the dashboard at ersatzteil-store.ch has no login, so anyone who has the link can edit or delete watches. That link was sent to a lot of people.
+Short version: changedetection.io saves your data fine. The dashboard at ersatzteil-store.ch was open to the internet with no login, and on the version you run (0.55.8), deleting watches is just a link. Anyone, or anything, that opens the right URL removes your data. No form, no confirmation, no password.
 
-This repo is the setup I'd run instead. Login is enforced at the deployment level, the data sits on a volume that survives container rebuilds, and there's a script that tests both.
+This repo is the setup I'd run instead, plus a script that proves it works.
 
 ## What I found
 
-When I opened http://ersatzteil-store.ch/ on 31 October, I didn't get a shop. I got the changedetection.io dashboard (version 0.55.8), with no password prompt. Settings → General → Password was empty.
+**The dashboard was public.** On 31 October, http://ersatzteil-store.ch/ opened the changedetection.io dashboard (version 0.55.8) straight away, with no login. The password field in the settings was empty.
 
-There were two watches in it: a LinkedIn profile and a Facebook page. Neither had anything to do with spare parts, and there was no watch for the shop. Somebody had replaced whatever was there before.
+**Strangers were already using it.** The only two watches in it were a LinkedIn profile and a Facebook page, nothing to do with spare parts. There was no watch for the shop. About half an hour later the dashboard suddenly had a login page because someone had set a password. Maybe that was your team, but anyone could have done it.
 
-About half an hour later the dashboard suddenly had a login page. Someone had set a password. Maybe that was your team, but it could just as easily have been any visitor, because the settings page was open to everyone. That's really the whole problem in one example.
-
-I also wanted to rule out the software losing data on its own, so I read the 0.55.8 source:
-
-- Every watch is written to its own `watch.json` the moment you save it, using a temp file plus an atomic rename (`store/file_saving_datastore.py`). It doesn't sit in memory waiting for a flush, so nothing gets "half saved".
-- The server had been up for almost 7 days, so a restart wiping data recently was out as well.
-
-So the fields aren't disappearing on their own. Other people are removing them.
-
-Two things in the source shaped the fix:
-
-1. **`SALTED_PASS`.** You can give changedetection.io its password through an environment variable instead of the settings page. Once that's set, the "remove password" button stops working (`blueprint/settings/__init__.py`). A visitor can't turn it off or lock you out by setting their own.
-2. **The official image doesn't declare a volume for `/datastore`.** If the container is started without one, all data lives inside the container and is gone the next time it's recreated, e.g. on an image update. I can't see from the outside how your server is set up, so this repo makes sure that can't happen.
-
-## What's in here
+**On 0.55.8, deleting is a plain link.** I read the source for your version. The Delete button on the edit page is a normal link to `/delete?uuid=<id>`, and the "are you sure?" popup is JavaScript only. The same goes for "pause all", "mute all", "clear history" and deleting groups. I tested it on a clean 0.55.8 without a password, like yours:
 
 ```
-docker-compose.yml                    the app + the Chrome browser it's configured for
-.env.example                          settings (copied to .env)
-scripts/set-password.sh               sets the login password
-scripts/check.sh                      tests the login and that data survives a rebuild
-scripts/backup.sh, restore.sh         backups of the data volume
-nginx/monitor.ersatzteil-store.ch.conf   site config for the nginx already on the server
+watches before:                       3
+GET /delete?uuid=all  (no login)  ->  302
+watches after:                        0
 ```
 
-The app only listens on `127.0.0.1:5000`, so it can't be reached directly from the internet. Public traffic goes through nginx with HTTPS.
+One request with no cookies and no token wiped everything. A person can do that, but so can a search engine crawler, a link-preview bot or a security scanner just following links on the page. Bots don't run the JavaScript popup, they just open the URL. Your dashboard page links directly to the pause and mute links, and each watch's edit page links to its Delete link.
 
-The version is pinned to 0.55.8, the one you're running now. Upgrades should happen on purpose. Newer versions migrate the data format and keep the old file around for rollback, so jumping between versions can make it look like recent changes vanished.
+**The app itself doesn't lose data.** I checked this too, so we're not chasing the wrong thing:
+
+- Every watch is written to its own `watch.json` the moment it's saved, through a temp file and an atomic rename. Nothing waits in memory.
+- The server had been up for almost 7 days, so a restart hadn't wiped anything recently.
+
+So the fields don't disappear by themselves. Something is removing them through the open dashboard.
+
+## What this setup changes
+
+| Problem | Fix |
+|---|---|
+| No login | Password set through `SALTED_PASS` in the environment. That's changedetection.io's own deployment option. When it's set, the "remove password" button in the UI does nothing, so nobody can switch the login off or lock you out by setting their own. |
+| Delete/pause/clear are plain links | Runs **0.60.10**. Since 0.60.x these are POST requests with CSRF protection, so opening a URL can't change anything. I tested `GET /delete?uuid=all` on 0.60.10: 404, nothing deleted. It uses the same data format as 0.55.8 (schema 33), so there's no migration. It also includes the security advisories fixed since 0.55.8. |
+| Dashboard on the public shop domain | The app only listens on `127.0.0.1`. Public access goes through your nginx on its own subdomain with HTTPS (`nginx/monitor.ersatzteil-store.ch.conf`). |
+| Data could be lost on a rebuild | `/datastore` is on a named volume. The official image doesn't declare one, so without it the data lives inside the container and disappears when the container is recreated, e.g. on an update. |
+| No backups | `scripts/backup.sh` and `scripts/restore.sh` |
 
 ## Running it
 
-You need Docker with Compose. On Windows, run the scripts in Git Bash or WSL.
+You need Docker with Compose. On Windows, use Git Bash.
 
 ```bash
 cp .env.example .env
-./scripts/set-password.sh       # asks for a password, stores only its hash
+./scripts/set-password.sh       # asks for a password, stores only the hash
 docker compose up -d
 ```
 
-Then open http://localhost:5000 and log in.
+Then open http://localhost:5000. If port 5000 is taken (Windows often reserves it), set `PORT=5080` or similar in `.env`.
 
 ## Testing it
 
@@ -57,13 +55,7 @@ Then open http://localhost:5000 and log in.
 ./scripts/check.sh
 ```
 
-It asks for your password, then:
-
-- checks that the dashboard and settings redirect to the login page when you're not logged in
-- checks that a wrong password doesn't get in and the right one does
-- adds a real watch, runs `docker compose down` and `up` (which throws the containers away), logs in again and checks the watch is still there
-
-The output should look like this:
+It asks for your password and tests the whole thing against the running app. It checks that the dashboard and settings send you to the login page, that a wrong password fails and the right one works, and that a newly added watch is still there after the containers are thrown away and recreated. This is a real run:
 
 ```
 Access:
@@ -72,35 +64,46 @@ Access:
   ok    wrong password is refused
   ok    correct password logs in
 Persistence:
-  ok    added test watch https://example.com/?persistence-check=...
+  ok    added test watch https://example.com/?persistence-check=1793469900
   ..    docker compose down && up (containers are destroyed and recreated)
   ok    watch is still there after recreate
 ```
 
-You can also do it by hand. Add a watch, change a few of its fields, run `docker compose down && docker compose up -d`, and it's all still there. Open the site in a private window and you get the login page.
+Delete the example.com test watch afterwards.
 
 ## Moving the live server over
 
-1. **Save the current data.** Find out where it lives:
+1. **Back up what's there now.** Check whether the current container has a volume:
    ```bash
    docker inspect <container> --format '{{json .Mounts}}'
    ```
-   If nothing is mounted on `/datastore`, the data is inside the container. Copy it out before you touch anything:
+   Either way, copy the data out:
    ```bash
    docker cp <container>:/datastore ./datastore-old
    tar czf datastore-old.tar.gz -C datastore-old .
    ```
-2. **Start this setup**, then load the old data into it:
+2. **Stop the old container**, then start this one and load the data:
    ```bash
    docker compose up -d
    ./scripts/restore.sh datastore-old.tar.gz
    ```
-3. **Point a subdomain at it.** Use `nginx/monitor.ersatzteil-store.ch.conf` and run certbot. The steps are at the top of the file. Put `ersatzteil-store.ch` back to serving the shop.
-4. **Back up nightly**:
+3. **Set up the subdomain** with `nginx/monitor.ersatzteil-store.ch.conf` and certbot. The steps are at the top of the file. Point `ersatzteil-store.ch` back at the shop.
+4. **Nightly backups:**
    ```
    0 3 * * * cd /opt/changedetection && ./scripts/backup.sh
    ```
 
+## Files
+
+```
+docker-compose.yml                      changedetection 0.60.10 + the Chrome browser it uses
+.env.example                            settings, copied to .env
+scripts/set-password.sh                 sets the login password
+scripts/check.sh                        end-to-end test: login + data survives a rebuild
+scripts/backup.sh, restore.sh           backups of the data volume
+nginx/monitor.ersatzteil-store.ch.conf  site config for the nginx on the server
+```
+
 ## One more thing
 
-The task calls `http://ersatzteil-store.ch/` the site you monitor. Right now that address *is* the monitoring dashboard, so a watch on it would just be watching itself. Once the dashboard moves to its own subdomain, point the watches at the actual shop and product pages you care about.
+The task calls `http://ersatzteil-store.ch/` the site you monitor, but that address is the dashboard itself, so a watch on it would just be watching itself. Once the dashboard has its own subdomain, point the watches at the real shop and product pages.

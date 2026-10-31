@@ -1,0 +1,39 @@
+services:
+  changedetection:
+    image: ghcr.io/dgtlmoon/changedetection.io:${CHANGEDETECTION_VERSION:-0.55.8}
+    hostname: changedetection
+    environment:
+      # Login password, set by ./scripts/set-password.sh. Because it comes from the
+      # environment, nobody can remove or change it from the web UI.
+      - SALTED_PASS=${SALTED_PASS:?run ./scripts/set-password.sh first}
+      - PLAYWRIGHT_DRIVER_URL=ws://browser-sockpuppet-chrome:3000
+      - BASE_URL=${BASE_URL:-}
+      - USE_X_SETTINGS=1
+      - TZ=Europe/Zurich
+    volumes:
+      # Watches, settings and history live here. Without this mount they live
+      # inside the container and are gone the next time it is recreated.
+      - changedetection-data:/datastore
+    ports:
+      # Localhost only. The public goes through nginx (see nginx/).
+      - "127.0.0.1:${PORT:-5000}:5000"
+    depends_on:
+      - browser-sockpuppet-chrome
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  browser-sockpuppet-chrome:
+    image: dgtlmoon/sockpuppetbrowser:latest
+    hostname: browser-sockpuppet-chrome
+    cap_add:
+      - SYS_ADMIN
+    environment:
+      - SCREEN_WIDTH=1920
+      - SCREEN_HEIGHT=1024
+      - SCREEN_DEPTH=16
+      - MAX_CONCURRENT_CHROME_PROCESSES=10
+    restart: unless-stopped
+
+volumes:
+  changedetection-data:
+    name: changedetection-data
